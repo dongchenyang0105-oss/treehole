@@ -195,6 +195,13 @@ html, body, #root {
   font-style: italic;
 }
 
+.bubble.record {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
 .bubble-time {
   font-size: 11px;
   color: var(--text-tertiary);

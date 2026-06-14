@@ -22,7 +22,8 @@ const SYSTEM_PROMPTS = {
 const MODE_LABELS = {
   mirror: '镜子',
   listen: '倾听',
-  knowledge: '知识伙伴'
+  knowledge: '知识伙伴',
+  record: '记录'
 }
 
 export function getModeLabel(mode) {

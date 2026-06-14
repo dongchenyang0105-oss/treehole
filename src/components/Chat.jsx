@@ -83,11 +83,14 @@ export default function Chat({ onNavigate, showToast }) {
     const text = input.trim()
     if (!text || loading) return
 
-    const apiKey = localStorage.getItem('treehole_api_key')
-    if (!apiKey) {
-      showToast('请先在设置中填写 API Key')
-      onNavigate('settings')
-      return
+    // 记录模式不需要API key
+    if (mode !== 'record') {
+      const apiKey = localStorage.getItem('treehole_api_key')
+      if (!apiKey) {
+        showToast('请先在设置中填写 API Key')
+        onNavigate('settings')
+        return
+      }
     }
 
     setInput('')
@@ -97,6 +100,15 @@ export default function Chat({ onNavigate, showToast }) {
       const userMsg = await saveMessage('user', text, mode)
       setMessages(prev => [...prev, userMsg])
       userMsgCount.current += 1
+
+      // 记录模式：只存储，不调用AI
+      if (mode === 'record') {
+        showToast('已记录')
+        if (userMsgCount.current % AUTO_MEMORY_INTERVAL === 0) {
+          autoUpdateMemory()
+        }
+        return
+      }
 
       setLoading(true)
 
@@ -132,8 +144,10 @@ export default function Chat({ onNavigate, showToast }) {
 
   function shouldShowTime(index) {
     if (index === 0) return true
-    const prev = messages[index - 1]
     const curr = messages[index]
+    // 记录模式的消息始终显示时间戳
+    if (curr.mode === 'record') return true
+    const prev = messages[index - 1]
     return new Date(curr.created_at).getTime() - new Date(prev.created_at).getTime() > 30 * 60 * 1000
   }
 
@@ -177,7 +191,7 @@ export default function Chat({ onNavigate, showToast }) {
             {messages.map((msg, i) => (
               <React.Fragment key={msg.id}>
                 {shouldShowTime(i) && <div className="bubble-time">{formatTime(msg.created_at)}</div>}
-                <div className={'bubble ' + msg.role}>{msg.content}</div>
+                <div className={'bubble ' + msg.role + (msg.mode === 'record' ? ' record' : '')}>{msg.content}</div>
               </React.Fragment>
             ))}
             {loading && <div className="bubble assistant loading">在想...</div>}
@@ -186,7 +200,8 @@ export default function Chat({ onNavigate, showToast }) {
       </div>
 
       <div className="input-area">
-        <textarea ref={inputRef} className="input-field" placeholder="说点什么..." rows={1}
+        <textarea ref={inputRef} className="input-field"
+          placeholder={mode === 'record' ? '记录一个想法...' : '说点什么...'} rows={1}
           value={input} onChange={handleInputChange} onKeyDown={handleKeyDown} />
         <button className="send-btn" onClick={handleSend}
           disabled={!input.trim() || loading}>↑</button>
