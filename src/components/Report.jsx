@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react'
-import { getMessagesByDateRange, getUserMessageCount, getReports, saveReport, deleteReport } from '../utils/db'
-import { generateReport } from '../utils/ai'
+import { getMessagesByDateRange, getUserMessageCount, getReports, saveReport, deleteReport, getUserMemory, saveUserMemory } from '../utils/db'
+import { generateReport, generateMemorySummary } from '../utils/ai'
 
 export default function Report({ onBack, showToast }) {
   const [reports, setReports] = useState([])
   const [loading, setLoading] = useState(false)
   const [range, setRange] = useState('week')
   const [msgCount, setMsgCount] = useState(0)
+  const [memory, setMemory] = useState(null)
 
   useEffect(() => {
     loadData()
@@ -14,12 +15,14 @@ export default function Report({ onBack, showToast }) {
 
   async function loadData() {
     try {
-      const [rpts, count] = await Promise.all([
+      const [rpts, count, mem] = await Promise.all([
         getReports(),
-        getUserMessageCount()
+        getUserMessageCount(),
+        getUserMemory()
       ])
       setReports(rpts)
       setMsgCount(count)
+      setMemory(mem)
     } catch (err) {
       console.error(err)
     }
@@ -54,13 +57,19 @@ export default function Report({ onBack, showToast }) {
         return
       }
 
-      const content = await generateReport(
-        userMsgs.map(m => ({ ...m, timestamp: new Date(m.created_at).getTime() }))
-      )
-
+      // 生成复盘报告
+      const content = await generateReport(userMsgs)
       const report = await saveReport(content, getRangeLabel(), userMsgs.length)
       setReports(prev => [report, ...prev])
-      showToast('报告已生成')
+
+      // 同时更新记忆摘要
+      showToast('报告已生成，正在更新记忆...')
+      const existingMemory = memory?.summary || ''
+      const newMemory = await generateMemorySummary(userMsgs, existingMemory)
+      const savedMemory = await saveUserMemory(newMemory)
+      setMemory(savedMemory)
+
+      showToast('报告和记忆都已更新')
     } catch (err) {
       showToast(err.message)
     } finally {
@@ -81,11 +90,8 @@ export default function Report({ onBack, showToast }) {
   function formatDate(iso) {
     const d = new Date(iso)
     return d.toLocaleDateString('zh-CN', {
-      year: 'numeric',
-      month: 'numeric',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
+      year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: '2-digit', minute: '2-digit'
     })
   }
 
@@ -109,6 +115,15 @@ export default function Report({ onBack, showToast }) {
           </div>
         </div>
 
+        {memory?.summary && (
+          <div className="report-card" style={{ borderLeft: '3px solid var(--accent)' }}>
+            <div className="report-meta">
+              🧠 AI 对你的记忆画像 · 更新于 {formatDate(memory.updated_at)}
+            </div>
+            <div style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{memory.summary}</div>
+          </div>
+        )}
+
         <div style={{ marginBottom: 16 }}>
           <div className="field-label" style={{ marginBottom: 8 }}>选择时间范围</div>
           <div className="mode-bar" style={{ padding: 0, border: 'none' }}>
@@ -121,9 +136,7 @@ export default function Report({ onBack, showToast }) {
                 key={r.key}
                 className={'mode-chip' + (range === r.key ? ' active' : '')}
                 onClick={() => setRange(r.key)}
-              >
-                {r.label}
-              </button>
+              >{r.label}</button>
             ))}
           </div>
         </div>
@@ -150,9 +163,7 @@ export default function Report({ onBack, showToast }) {
               <span
                 style={{ float: 'right', cursor: 'pointer', color: 'var(--text-tertiary)' }}
                 onClick={() => handleDelete(r.id)}
-              >
-                🗑️
-              </span>
+              >🗑️</span>
             </div>
             <div style={{ whiteSpace: 'pre-wrap' }}>{r.content}</div>
           </div>

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { saveMessage, getRecentMessages } from '../utils/db'
-import { sendMessage, getModes } from '../utils/ai'
+import { saveMessage, getRecentMessages, getUserMemory, saveUserMemory, getMessages } from '../utils/db'
+import { sendMessage, getModes, generateMemorySummary } from '../utils/ai'
+
+const AUTO_MEMORY_INTERVAL = 10 // 每10条用户消息自动更新记忆
 
 export default function Chat({ onNavigate, showToast }) {
   const [messages, setMessages] = useState([])
@@ -8,11 +10,14 @@ export default function Chat({ onNavigate, showToast }) {
   const [mode, setMode] = useState('listen')
   const [loading, setLoading] = useState(false)
   const [initialLoad, setInitialLoad] = useState(true)
+  const [memory, setMemory] = useState('')
+  const userMsgCount = useRef(0)
   const messagesRef = useRef(null)
   const inputRef = useRef(null)
 
   useEffect(() => {
     loadMessages()
+    loadMemory()
   }, [])
 
   useEffect(() => {
@@ -23,10 +28,34 @@ export default function Chat({ onNavigate, showToast }) {
     try {
       const msgs = await getRecentMessages(50)
       setMessages(msgs)
+      userMsgCount.current = msgs.filter(m => m.role === 'user').length
     } catch (err) {
       console.error(err)
     } finally {
       setInitialLoad(false)
+    }
+  }
+
+  async function loadMemory() {
+    try {
+      const mem = await getUserMemory()
+      if (mem) setMemory(mem.summary || '')
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  async function autoUpdateMemory() {
+    try {
+      const allMsgs = await getMessages(100)
+      const userMsgs = allMsgs.filter(m => m.role === 'user')
+      if (userMsgs.length < 5) return
+
+      const newMemory = await generateMemorySummary(userMsgs, memory)
+      await saveUserMemory(newMemory)
+      setMemory(newMemory)
+    } catch (err) {
+      console.error('记忆更新失败:', err)
     }
   }
 
@@ -62,24 +91,29 @@ export default function Chat({ onNavigate, showToast }) {
     }
 
     setInput('')
-    if (inputRef.current) {
-      inputRef.current.style.height = 'auto'
-    }
+    if (inputRef.current) inputRef.current.style.height = 'auto'
 
     try {
       const userMsg = await saveMessage('user', text, mode)
       setMessages(prev => [...prev, userMsg])
+      userMsgCount.current += 1
 
       setLoading(true)
 
-      const contextMessages = [...messages.slice(-20), userMsg].map(m => ({
+      // 用最近10条作为上下文（省token）
+      const contextMessages = [...messages.slice(-10), userMsg].map(m => ({
         role: m.role,
         content: m.content
       }))
 
-      const reply = await sendMessage(contextMessages, mode)
+      const reply = await sendMessage(contextMessages, mode, memory)
       const aiMsg = await saveMessage('assistant', reply, mode)
       setMessages(prev => [...prev, aiMsg])
+
+      // 每10条用户消息自动更新记忆（后台执行，不阻塞对话）
+      if (userMsgCount.current % AUTO_MEMORY_INTERVAL === 0) {
+        autoUpdateMemory()
+      }
     } catch (err) {
       showToast(err.message)
     } finally {
@@ -100,9 +134,7 @@ export default function Chat({ onNavigate, showToast }) {
     if (index === 0) return true
     const prev = messages[index - 1]
     const curr = messages[index]
-    const prevTime = new Date(prev.created_at).getTime()
-    const currTime = new Date(curr.created_at).getTime()
-    return currTime - prevTime > 30 * 60 * 1000
+    return new Date(curr.created_at).getTime() - new Date(prev.created_at).getTime() > 30 * 60 * 1000
   }
 
   const modes = getModes()
@@ -110,13 +142,9 @@ export default function Chat({ onNavigate, showToast }) {
   if (initialLoad) {
     return (
       <div className="app" style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
         color: 'var(--text-tertiary)'
-      }}>
-        加载中...
-      </div>
+      }}>加载中...</div>
     )
   }
 
@@ -125,24 +153,15 @@ export default function Chat({ onNavigate, showToast }) {
       <div className="header">
         <span className="header-title">树洞</span>
         <div className="header-actions">
-          <button className="icon-btn" onClick={() => onNavigate('report')} title="复盘报告">
-            📊
-          </button>
-          <button className="icon-btn" onClick={() => onNavigate('settings')} title="设置">
-            ⚙️
-          </button>
+          <button className="icon-btn" onClick={() => onNavigate('report')} title="复盘报告">📊</button>
+          <button className="icon-btn" onClick={() => onNavigate('settings')} title="设置">⚙️</button>
         </div>
       </div>
 
       <div className="mode-bar">
         {modes.map(m => (
-          <button
-            key={m.key}
-            className={'mode-chip' + (mode === m.key ? ' active' : '')}
-            onClick={() => setMode(m.key)}
-          >
-            {m.label}
-          </button>
+          <button key={m.key} className={'mode-chip' + (mode === m.key ? ' active' : '')}
+            onClick={() => setMode(m.key)}>{m.label}</button>
         ))}
       </div>
 
@@ -157,38 +176,20 @@ export default function Chat({ onNavigate, showToast }) {
           <>
             {messages.map((msg, i) => (
               <React.Fragment key={msg.id}>
-                {shouldShowTime(i) && (
-                  <div className="bubble-time">{formatTime(msg.created_at)}</div>
-                )}
-                <div className={'bubble ' + msg.role}>
-                  {msg.content}
-                </div>
+                {shouldShowTime(i) && <div className="bubble-time">{formatTime(msg.created_at)}</div>}
+                <div className={'bubble ' + msg.role}>{msg.content}</div>
               </React.Fragment>
             ))}
-            {loading && (
-              <div className="bubble assistant loading">在想...</div>
-            )}
+            {loading && <div className="bubble assistant loading">在想...</div>}
           </>
         )}
       </div>
 
       <div className="input-area">
-        <textarea
-          ref={inputRef}
-          className="input-field"
-          placeholder="说点什么..."
-          rows={1}
-          value={input}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-        />
-        <button
-          className="send-btn"
-          onClick={handleSend}
-          disabled={!input.trim() || loading}
-        >
-          ↑
-        </button>
+        <textarea ref={inputRef} className="input-field" placeholder="说点什么..." rows={1}
+          value={input} onChange={handleInputChange} onKeyDown={handleKeyDown} />
+        <button className="send-btn" onClick={handleSend}
+          disabled={!input.trim() || loading}>↑</button>
       </div>
     </>
   )

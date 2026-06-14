@@ -134,3 +134,41 @@ export async function exportData() {
     exportedAt: new Date().toISOString()
   }
 }
+
+// ---- 用户记忆摘要 ----
+
+export async function getUserMemory() {
+  const { data, error } = await supabase
+    .from('user_memory')
+    .select('*')
+    .single()
+
+  if (error && error.code !== 'PGRST116') throw error
+  return data
+}
+
+export async function saveUserMemory(summary) {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('未登录')
+
+  const existing = await getUserMemory()
+
+  if (existing) {
+    const { data, error } = await supabase
+      .from('user_memory')
+      .update({ summary, updated_at: new Date().toISOString() })
+      .eq('user_id', user.id)
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  } else {
+    const { data, error } = await supabase
+      .from('user_memory')
+      .insert({ user_id: user.id, summary })
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  }
+}
